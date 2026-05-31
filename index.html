@@ -432,7 +432,7 @@
     </div>
     <div class="stat-box">
       <div class="stat-label">Target</div>
-      <div class="stat-value" id="target-val">500</div>
+      <div class="stat-value" id="target-val">2000</div>
     </div>
     <div class="stat-box">
       <div class="stat-label">Moves</div>
@@ -470,7 +470,7 @@ const COLS = 8, ROWS = 8;
 const GEM_TYPES = 7;
 const GEM_EMOJI = ['🍓','🍇','🍏','🍋','🍊','🍒','🍉'];
 
-let board = [], score = 0, level = 1, moves = 30, target = 500;
+let board = [], score = 0, level = 1, moves = 30, target = 2000;
 let selected = null, hints = 3, busy = false;
 let touchStart = null;
 
@@ -690,6 +690,8 @@ async function trySwap(r1, c1, r2, c2) {
 
   if (!hasMoves()) shuffleBoard();
 
+  saveGame();
+
   if (score >= target) {
     showLevelComplete();
   } else if (moves <= 0) {
@@ -709,7 +711,7 @@ async function processCascade(matches, combo) {
   await delay(300);
 
   // Score
-  const pts = matches.length * 50 * combo;
+  const pts = matches.length * 20 * combo;
   score += pts;
   showScorePop(matches, pts);
 
@@ -851,21 +853,54 @@ function showGameOver() {
 function nextLevel() {
   overlay.classList.remove('show');
   level++;
-  target = Math.round(target * 1.6);
+  target = Math.round(target * 2.0);
   moves = 30 + Math.min(level * 2, 20);
   hints = 3;
   initBoard();
   render();
+  saveGame();
 }
 
 function newGame() {
   overlay.classList.remove('show');
-  score = 0; level = 1; target = 500; moves = 30; hints = 3; selected = null;
+  score = 0; level = 1; target = 2000; moves = 30; hints = 3; selected = null;
+  clearSave();
   initBoard();
   render();
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Save / Load ─────────────────────────────────────────────────────────────
+
+const SAVE_KEY = 'fruitCascade_save';
+
+function saveGame() {
+  try {
+    const state = { board, score, level, moves, hints, target };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  } catch(e) {}
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    if (!s.board || s.board.length !== ROWS) return false;
+    board  = s.board;
+    score  = s.score  ?? 0;
+    level  = s.level  ?? 1;
+    moves  = s.moves  ?? 30;
+    hints  = s.hints  ?? 3;
+    target = s.target ?? 2000;
+    return true;
+  } catch(e) { return false; }
+}
+
+function clearSave() {
+  try { localStorage.removeItem(SAVE_KEY); } catch(e) {}
+}
 
 // ── Init ───────────────────────────────────────────────────────────────────
 
@@ -875,10 +910,19 @@ document.getElementById('shuffle-btn').addEventListener('click', () => {
   if (busy) return;
   shuffleBoard();
   render();
+  saveGame();
 });
 
-initBoard();
-render();
+// Auto-save after every move
+const _origTrySwap = trySwap;
+// (save is called explicitly inside trySwap and cascade end)
+
+if (loadGame()) {
+  render();
+} else {
+  initBoard();
+  render();
+}
 
 // Register service worker for PWA
 if ('serviceWorker' in navigator) {
