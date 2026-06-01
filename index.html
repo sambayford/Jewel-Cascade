@@ -243,13 +243,18 @@
     }
 
     /* Match flash */
-    .cell.matching .gem {
-      animation: flash-match 0.3s ease forwards;
-    }
-    @keyframes flash-match {
-      0%   { transform: scale(1); opacity: 1; }
-      50%  { transform: scale(1.3); opacity: 0.8; filter: brightness(2); }
-      100% { transform: scale(0); opacity: 0; }
+    /* matched cells hide immediately — flying clones do the visual */
+    .cell.matching .gem { visibility: hidden; }
+
+    /* Flying fruit clone */
+    .fly-fruit {
+      position: fixed;
+      pointer-events: none;
+      z-index: 999;
+      font-size: 30px;
+      line-height: 1;
+      will-change: transform, opacity;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));
     }
 
     /* Drop in */
@@ -508,15 +513,8 @@
         transform: scale(1.12);
       }
     }
-    /* Special fruit flash — big burst */
-    .cell.matching-special .gem {
-      animation: flash-special 0.45s ease forwards;
-    }
-    @keyframes flash-special {
-      0%   { transform: scale(1);   opacity: 1; filter: none; }
-      35%  { transform: scale(1.6); opacity: 1; filter: brightness(4) saturate(2) drop-shadow(0 0 16px #ffe066); }
-      100% { transform: scale(0);   opacity: 0; }
-    }
+    /* Special fruit — also hide gem, flying clone carries the visual */
+    .cell.matching-special .gem { visibility: hidden; }
 
 
     /* Combo counter */
@@ -880,11 +878,12 @@ function collectClear(initialCells) {
     toNull.add(key);
     const sp = special[r] && special[r][c];
     if (sp === 'glowing') {
-      // 3x3 blast
-      for (let dr = -1; dr <= 1; dr++)
-        for (let dc = -1; dc <= 1; dc++)
-          if (r+dr >= 0 && r+dr < ROWS && c+dc >= 0 && c+dc < COLS)
-            queue.push([r+dr, c+dc]);
+      // Clear all fruit of the same type on the board
+      const gemType = board[r][c];
+      for (let rr = 0; rr < ROWS; rr++)
+        for (let cc = 0; cc < COLS; cc++)
+          if (board[rr][cc] === gemType)
+            queue.push([rr, cc]);
     }
   }
   return [...toNull].map(idx => [Math.floor(idx/COLS), idx%COLS]);
@@ -934,34 +933,73 @@ async function cascade(combo) {
     }
   }
 
-  // Flash
+  // Hide matched gems and capture their types for flying clones
+  // Build sets: cells that merge into a pivot vs cells that fly to monkey
+  // Each newSpecial has a pivot and the group cells that feed into it
+  const mergePivotMap = new Map(); // key="r,c" -> pivot {r,c}
+  const pivotSet = new Set();
+  for (const ns of newSpecials) {
+    pivotSet.add(ns.r * COLS + ns.c);
+    // Find the group(s) that created this special and mark all their cells
+    for (const grp of groups) {
+      if (grp.cells.some(([gr,gc]) => gr === ns.r && gc === ns.c) ||
+          (grp.gemType === ns.gemType && grp.cells.some(([gr,gc]) => Math.abs(gr-ns.r)+Math.abs(gc-ns.c) <= 2))) {
+        for (const [gr,gc] of grp.cells) {
+          mergePivotMap.set(gr * COLS + gc, ns);
+        }
+      }
+    }
+  }
+
+  // Cells not merging into a special fly to the monkey
+  const flyCells = clearCells.filter(([r,c]) => !mergePivotMap.has(r*COLS+c) && !pivotSet.has(r*COLS+c));
+  const capturedTypes = flyCells.map(([r,c]) => board[r][c] ?? 0);
+
+  // Hide all matched cells
   clearCells.forEach(([r, c]) => {
     const el = cell(r, c);
     if (!el) return;
     el.classList.add(special[r][c] ? 'matching-special' : 'matching');
   });
-  await delay(420);
 
-  // Score — specials score more, combos multiply
+  // Merge animations: group cells fly into their pivot
+  for (const ns of newSpecials) {
+    const mergeCells = [...mergePivotMap.entries()]
+      .filter(([,pivot]) => pivot.r === ns.r && pivot.c === ns.c)
+      .map(([key]) => [Math.floor(key/COLS), key%COLS]);
+    mergeFruitToPivot(mergeCells, ns.r, ns.c);
+  }
+
+  // Non-merge cells fly to monkey
+  const flyDuration = flyCells.length > 0 ? flyFruitToMonkey(flyCells, capturedTypes) : 0;
+  const mergeDuration = newSpecials.length > 0 ? 380 : 0;
+  const waitDuration = Math.max(flyDuration, mergeDuration);
+
+  // Score
   let basePts = 0;
-  clearCells.forEach(([r,c]) => {
-    const sp = special[r][c];
-    basePts += sp ? 60 : 20;
-  });
-  const multiplier = combo; // ×1 for first match, ×2 for cascade, etc.
+  clearCells.forEach(([r,c]) => { basePts += special[r][c] ? 60 : 20; });
+  const multiplier = combo;
   const pts = basePts * multiplier;
   score += pts;
   showScorePop(allCells[0], pts, multiplier);
   if (combo >= 2) showCombo(combo);
   updateUI();
-  monkeyEat(allCells, combo);
+
+  // Wait for animations, then monkey chomps (only if fruit went to monkey)
+  await delay(Math.max(waitDuration - 80, 300));
+  if (flyCells.length > 0) {
+    monkeyEat(flyCells, combo, capturedTypes);
+    await delay(180);
+  } else {
+    await delay(100);
+  }
 
   // Clear from data
   clearCells.forEach(([r, c]) => { board[r][c] = null; special[r][c] = null; });
 
-  // Place new specials (only if pivot cell was cleared and not already special)
+  // Place new specials
   for (const { r, c, kind, gemType } of newSpecials) {
-    if (board[r][c] === null) { // was cleared
+    if (board[r][c] === null) {
       board[r][c]   = gemType;
       special[r][c] = kind;
     }
@@ -972,7 +1010,7 @@ async function cascade(combo) {
 
   const fresh = dropAndFill();
   render(fresh);
-  await delay(400);
+  await delay(380);
 
   await cascade(combo + 1);
 }
@@ -983,14 +1021,14 @@ const MONKEY_PHRASES = [
 ];
 let monkeyTimer = null;
 
-function monkeyEat(matches, combo) {
+function monkeyEat(matches, combo, capturedTypes) {
   const monkeyEl  = document.getElementById('monkey');
   const fruitEl   = document.getElementById('monkey-fruit');
   const speechEl  = document.getElementById('monkey-speech');
 
-  // Pick a fruit from the matched set to show
+  // Fruit display is handled by flying clones; just show the last one briefly
   const [r, c] = matches[Math.floor(Math.random() * matches.length)];
-  const g = board[r] && board[r][c] != null ? board[r][c] : null;
+  const g = capturedTypes ? capturedTypes[0] : (board[r] && board[r][c] != null ? board[r][c] : null);
   fruitEl.textContent = g !== null ? GEM_EMOJI[g] : GEM_EMOJI[Math.floor(Math.random() * GEM_TYPES)];
 
   // Pick phrase — extra excitement for combos
@@ -1016,6 +1054,91 @@ function monkeyEat(matches, combo) {
     fruitEl.classList.remove('show');
     speechEl.classList.remove('show');
   }, 1000);
+}
+
+function mergeFruitToPivot(mergeCells, pivotR, pivotC) {
+  // Fly all cells in mergeCells straight into the pivot cell, then flash it
+  const pivotEl = cell(pivotR, pivotC);
+  if (!pivotEl) return;
+  const pRect = pivotEl.getBoundingClientRect();
+  const destX = pRect.left + pRect.width  / 2;
+  const destY = pRect.top  + pRect.height / 2;
+
+  mergeCells.forEach(([r, c], idx) => {
+    if (r === pivotR && c === pivotC) return; // skip pivot itself
+    const el = cell(r, c);
+    if (!el) return;
+    const cRect = el.getBoundingClientRect();
+    const startX = cRect.left + cRect.width  / 2;
+    const startY = cRect.top  + cRect.height / 2;
+
+    const fly = document.createElement('div');
+    fly.className = 'fly-fruit';
+    fly.textContent = GEM_EMOJI[board[r][c] ?? 0];
+    fly.style.left = startX + 'px';
+    fly.style.top  = startY + 'px';
+    fly.style.transform = 'translate(-50%, -50%) scale(1)';
+    fly.style.opacity = '1';
+    document.body.appendChild(fly);
+
+    const dx = destX - startX;
+    const dy = destY - startY;
+    setTimeout(() => {
+      fly.animate([
+        { transform: 'translate(-50%, -50%) scale(1)',   opacity: 1 },
+        { transform: `translate(calc(${dx}px - 50%), calc(${dy}px - 50%)) scale(0.2)`, opacity: 0 }
+      ], { duration: 300, easing: 'ease-in', fill: 'forwards' }).onfinish = () => fly.remove();
+    }, idx * 40);
+  });
+}
+
+function flyFruitToMonkey(clearCells, capturedTypes) {
+  // Get monkey's screen position (the fruit slot in front of it)
+  const fruitEl  = document.getElementById('monkey-fruit');
+  const monkeyEl = document.getElementById('monkey');
+  const mRect = fruitEl.getBoundingClientRect();
+  const destX = mRect.left + mRect.width / 2;
+  const destY = mRect.top  + mRect.height / 2;
+
+  // Stagger fruit launches so they don't all arrive at once
+  const maxFly = Math.min(clearCells.length, 12); // cap for perf
+  const step = Math.min(40, 320 / maxFly);
+
+  clearCells.slice(0, maxFly).forEach(([r, c], idx) => {
+    const el = cell(r, c);
+    if (!el) return;
+    const cRect = el.getBoundingClientRect();
+    const startX = cRect.left + cRect.width  / 2;
+    const startY = cRect.top  + cRect.height / 2;
+
+    const emoji = GEM_EMOJI[capturedTypes[idx] ?? capturedTypes[0]];
+
+    // Create flying clone
+    const fly = document.createElement('div');
+    fly.className = 'fly-fruit';
+    fly.textContent = emoji;
+    fly.style.left = startX + 'px';
+    fly.style.top  = startY + 'px';
+    fly.style.transform = 'translate(-50%, -50%) scale(1)';
+    fly.style.opacity = '1';
+    document.body.appendChild(fly);
+
+    const delay_ms = idx * 60;
+    const duration = 320;
+
+    setTimeout(() => {
+      const dx = destX - startX;
+      const dy = destY - startY;
+
+      fly.animate([
+        { transform: 'translate(-50%, -50%) scale(1)',   opacity: 1 },
+        { transform: `translate(calc(${dx}px - 50%), calc(${dy}px - 50%)) scale(0.5)`, opacity: 0 }
+      ], { duration, easing: 'ease-in', fill: 'forwards' }).onfinish = () => fly.remove();
+    }, delay_ms);
+  });
+
+  // Return how long until the last fruit arrives (so monkey can chomp then)
+  return maxFly * 60 + 350;
 }
 
 function showScorePop([r, c], pts, multiplier = 1) {
