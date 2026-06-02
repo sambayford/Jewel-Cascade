@@ -558,6 +558,29 @@
       to   { transform: scale(1);   opacity: 1; }
     }
 
+
+    /* Fruit row aligned under stat boxes */
+    .fruit-row {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+    }
+    .stat-fruit {
+      flex: 1;
+      font-family: 'Cinzel', serif;
+      color: var(--dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 22px;
+    }
+    .stat-fruit .sf-emoji { font-size: 1.8rem; line-height: 1; }
+    .stat-fruit .sf-count { font-size: 0.9rem; color: var(--dim); }
+    .stat-fruit.done .sf-count { color: #30d158; }
+    .stat-fruit .sf-check { opacity: 0; font-size: 0.9rem; transition: opacity 0.3s; }
+    .stat-fruit.done .sf-check { opacity: 1; color: #30d158; }
+
   </style>
 </head>
 <body>
@@ -567,28 +590,7 @@
     <p>Match · Splash · Munch</p>
   </header>
 
-  <div class="stats">
-    <div class="stat-box">
-      <div class="stat-label">Score</div>
-      <div class="stat-value" id="score-val">0</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Best</div>
-      <div class="stat-value" id="hiscore-val" style="color:var(--gold)">0</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Target</div>
-      <div class="stat-value" id="target-val">2000</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Moves</div>
-      <div class="stat-value" id="moves-val">30</div>
-    </div>
-  </div>
 
-  <div class="progress-wrap">
-    <div class="progress-fill" id="progress-bar" style="width:0%"></div>
-  </div>
 
   <div id="board-wrap">
     <div id="board"></div>
@@ -601,10 +603,18 @@
     <div id="monkey-speech"></div>
   </div>
 
+  <div class="fruit-row">
+    <div class="stat-fruit" id="fruit-slot-0"></div>
+    <div class="stat-fruit" id="fruit-slot-1"></div>
+    <div class="stat-fruit" id="fruit-slot-2"></div>
+  </div>
   <div class="actions">
     <button class="btn" id="hint-btn">💡 Hint<span id="hint-count">3</span></button>
     <button class="btn primary" id="new-btn">✦ New Game</button>
-    <button class="btn" id="shuffle-btn">🔀 Shuffle</button>
+    <div class="stat-box" style="flex:1">
+      <div class="stat-label">Moves Used</div>
+      <div class="stat-value" id="moves-used-val">0</div>
+    </div>
   </div>
 </div>
 
@@ -612,9 +622,7 @@
   <div class="overlay-card">
     <div class="overlay-title" id="ol-title">Level Complete!</div>
     <div class="overlay-moves" id="ol-moves"></div>
-    <div class="overlay-sub" id="ol-sub">Score</div>
-    <div class="overlay-score" id="ol-score">0</div>
-    <div id="ol-hiscore-wrap" style="font-size:0.7rem;color:var(--gold);letter-spacing:0.12em;margin:-12px 0 16px;display:none">🏆 NEW BEST!</div>
+    <div id="ol-hiscore-wrap" style="font-size:0.7rem;color:var(--gold);letter-spacing:0.12em;margin:4px 0 16px;display:none">🏆 New Best Level!</div>
     <button class="overlay-btn" id="ol-btn">Next Level</button>
   </div>
 </div>
@@ -625,22 +633,19 @@ const GEM_TYPES = 7;
 const GEM_EMOJI = ['🍉','🍇','🍏','🍌','🍊','🍑','🫐'];
 
 const SAVE_KEY = 'fruitCascade_save';
-const HI_KEY   = 'fruitCascade_hi';
+const BEST_KEY = 'fruitCascade_best';
 
 let board = [];
 let special = []; // parallel board: null | 'glowing'
-let score = 0, level = 1, moves = 30, target = 2000, hiScore = 0, hints = 3;
+let level = 1, moves = 30, movesUsed = 0, bestLevel = 1, hints = 3;
+let fruitTargets = [], fruitCollected = [];
 let selected = null, busy = false, touchStart = null;
 let comboTimer = null;
 
-const boardEl   = document.getElementById('board');
-const scoreEl   = document.getElementById('score-val');
-const targetEl  = document.getElementById('target-val');
-const movesEl   = document.getElementById('moves-val');
-const progEl    = document.getElementById('progress-bar');
-const hintCnt   = document.getElementById('hint-count');
-const hiscoreEl = document.getElementById('hiscore-val');
-const overlay   = document.getElementById('overlay');
+const boardEl     = document.getElementById('board');
+const movesUsedEl = document.getElementById('moves-used-val');
+const hintCnt     = document.getElementById('hint-count');
+const overlay     = document.getElementById('overlay');
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
@@ -648,6 +653,26 @@ function rnd(n) { return Math.floor(Math.random() * n); }
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Board ──────────────────────────────────────────────────────────────────
+
+function levelFruitTargets(lvl) {
+  const count = lvl * 3;
+  // Pick 3 random fruit types for this level (seeded by level so consistent on reload)
+  const order = [...Array(GEM_TYPES).keys()].sort((a, b) => {
+    // deterministic shuffle based on level
+    const ha = Math.sin(lvl * 127 + a * 31) * 10000;
+    const hb = Math.sin(lvl * 127 + b * 31) * 10000;
+    return (ha - Math.floor(ha)) - (hb - Math.floor(hb));
+  });
+  const chosen = new Set(order.slice(0, 3));
+  return Array.from({ length: GEM_TYPES }, (_, g) => chosen.has(g) ? count : 0);
+}
+function initTargets() {
+  fruitTargets   = levelFruitTargets(level);
+  fruitCollected = Array(GEM_TYPES).fill(0);
+}
+function allTargetsMet() {
+  return fruitTargets.every((t, i) => t === 0 || (fruitCollected[i] || 0) >= t);
+}
 
 function newBoard() {
   board = []; special = [];
@@ -837,14 +862,31 @@ function render(newCells = new Set()) {
 }
 
 function updateUI() {
-  scoreEl.textContent  = score.toLocaleString();
-  movesEl.textContent  = moves;
-  movesEl.classList.toggle('warn',   moves <= 10 && moves > 5);
-  movesEl.classList.toggle('danger', moves <= 5);
-  targetEl.textContent = target.toLocaleString();
-  hintCnt.textContent  = hints;
-  hiscoreEl.textContent = hiScore.toLocaleString();
-  progEl.style.width   = Math.min(100, (score / target) * 100) + '%';
+  movesUsedEl.textContent = movesUsed;
+  hintCnt.textContent     = hints;
+  renderFruitTargets();
+}
+
+function renderFruitTargets() {
+  // Find the 3 required fruit types
+  const required = [];
+  for (let g = 0; g < GEM_TYPES; g++) {
+    if ((fruitTargets[g] || 0) > 0) required.push(g);
+  }
+  // Fill one into each stat-fruit slot
+  for (let slot = 0; slot < 3; slot++) {
+    const el = document.getElementById('fruit-slot-' + slot);
+    if (!el) continue;
+    if (slot >= required.length) { el.innerHTML = ''; continue; }
+    const g         = required[slot];
+    const tgt       = fruitTargets[g] || 0;
+    const collected = Math.min(fruitCollected[g] || 0, tgt);
+    const done      = collected >= tgt;
+    el.className = 'stat-fruit' + (done ? ' done' : '');
+    el.innerHTML = '<span class="sf-emoji">' + GEM_EMOJI[g] + '</span>' +
+                   '<span class="sf-count">' + collected + '/' + tgt + '</span>' +
+                   '<span class="sf-check">✓</span>';
+  }
 }
 
 // ── Combo display ──────────────────────────────────────────────────────────
@@ -975,13 +1017,17 @@ async function cascade(combo) {
   const mergeDuration = newSpecials.length > 0 ? 380 : 0;
   const waitDuration = Math.max(flyDuration, mergeDuration);
 
+  // Count all cleared fruit toward targets (including pivot cells — they were real fruit)
+  clearCells.forEach(([r,c]) => {
+    const g = board[r][c];
+    if (g != null && g >= 0 && g < GEM_TYPES) fruitCollected[g] = (fruitCollected[g]||0) + 1;
+  });
+
   // Score
   let basePts = 0;
   clearCells.forEach(([r,c]) => { basePts += special[r][c] ? 60 : 20; });
   const multiplier = combo;
   const pts = basePts * multiplier;
-  score += pts;
-  showScorePop(allCells[0], pts, multiplier);
   if (combo >= 2) showCombo(combo);
   updateUI();
 
@@ -1083,11 +1129,13 @@ function mergeFruitToPivot(mergeCells, pivotR, pivotC) {
 
     const dx = destX - startX;
     const dy = destY - startY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const mergeDur = Math.round(dist / 0.9);
     setTimeout(() => {
       fly.animate([
         { transform: 'translate(-50%, -50%) scale(1)',   opacity: 1 },
         { transform: `translate(calc(${dx}px - 50%), calc(${dy}px - 50%)) scale(0.2)`, opacity: 0 }
-      ], { duration: 300, easing: 'ease-in', fill: 'forwards' }).onfinish = () => fly.remove();
+      ], { duration: mergeDur, easing: 'ease-in', fill: 'forwards' }).onfinish = () => fly.remove();
     }, idx * 40);
   });
 }
@@ -1100,36 +1148,34 @@ function flyFruitToMonkey(clearCells, capturedTypes) {
   const destX = mRect.left + mRect.width / 2;
   const destY = mRect.top  + mRect.height / 2;
 
-  // Stagger fruit launches so they don't all arrive at once
-  const maxFly = Math.min(clearCells.length, 12); // cap for perf
-  const step = Math.min(40, 320 / maxFly);
+  const SPEED   = 0.9; // px per ms — constant travel speed
+  const STAGGER = 60;  // ms between each fruit launch
+  const maxFly  = Math.min(clearCells.length, 12);
+  let latestArrival = 0;
 
   clearCells.slice(0, maxFly).forEach(([r, c], idx) => {
     const el = cell(r, c);
     if (!el) return;
-    const cRect = el.getBoundingClientRect();
+    const cRect  = el.getBoundingClientRect();
     const startX = cRect.left + cRect.width  / 2;
     const startY = cRect.top  + cRect.height / 2;
+    const dx     = destX - startX;
+    const dy     = destY - startY;
+    const dist   = Math.sqrt(dx*dx + dy*dy);
+    const duration = Math.round(dist / SPEED);
+    const delay_ms = idx * STAGGER;
+    if (delay_ms + duration > latestArrival) latestArrival = delay_ms + duration;
 
-    const emoji = GEM_EMOJI[capturedTypes[idx] ?? capturedTypes[0]];
-
-    // Create flying clone
     const fly = document.createElement('div');
-    fly.className = 'fly-fruit';
-    fly.textContent = emoji;
-    fly.style.left = startX + 'px';
-    fly.style.top  = startY + 'px';
+    fly.className   = 'fly-fruit';
+    fly.textContent = GEM_EMOJI[capturedTypes[idx] ?? capturedTypes[0]];
+    fly.style.left  = startX + 'px';
+    fly.style.top   = startY + 'px';
     fly.style.transform = 'translate(-50%, -50%) scale(1)';
-    fly.style.opacity = '1';
+    fly.style.opacity   = '1';
     document.body.appendChild(fly);
 
-    const delay_ms = idx * 60;
-    const duration = 320;
-
     setTimeout(() => {
-      const dx = destX - startX;
-      const dy = destY - startY;
-
       fly.animate([
         { transform: 'translate(-50%, -50%) scale(1)',   opacity: 1 },
         { transform: `translate(calc(${dx}px - 50%), calc(${dy}px - 50%)) scale(0.5)`, opacity: 0 }
@@ -1137,8 +1183,7 @@ function flyFruitToMonkey(clearCells, capturedTypes) {
     }, delay_ms);
   });
 
-  // Return how long until the last fruit arrives (so monkey can chomp then)
-  return maxFly * 60 + 350;
+  return latestArrival + 80; // small buffer after last fruit lands
 }
 
 function showScorePop([r, c], pts, multiplier = 1) {
@@ -1234,6 +1279,7 @@ async function trySwap(r1, c1, r2, c2) {
   await delay(190);
 
   moves--;
+  movesUsed++;
   render();           // board now shows swapped state
   await cascade(1);   // finds & clears matches, drops, fills, repeats
 
@@ -1242,7 +1288,7 @@ async function trySwap(r1, c1, r2, c2) {
 
   saveGame();
 
-  if (score >= target)  showLevelComplete();
+  if (allTargetsMet())  showLevelComplete();
   else if (moves <= 0)  showGameOver();
 
   busy = false;
@@ -1276,19 +1322,15 @@ function showHint() {
 
 // ── Overlays ───────────────────────────────────────────────────────────────
 
-function checkHiScore() {
-  if (score > hiScore) { hiScore = score; saveHiScore(); return true; }
+function checkBestLevel() {
+  if (level > bestLevel) { bestLevel = level; saveBestLevel(); return true; }
   return false;
 }
 
 function showLevelComplete() {
-  const isNew = checkHiScore();
-  const maxMoves = 30 + Math.min((level - 1) * 2, 20);
-  const used = maxMoves - moves;
+  const isNew = checkBestLevel();
   document.getElementById('ol-title').textContent = 'Level Complete!';
-  document.getElementById('ol-moves').textContent = used + ' move' + (used === 1 ? '' : 's') + ' used';
-  document.getElementById('ol-sub').textContent   = 'Score';
-  document.getElementById('ol-score').textContent = score.toLocaleString();
+  document.getElementById('ol-moves').textContent = movesUsed + ' move' + (movesUsed === 1 ? '' : 's') + ' used';
   document.getElementById('ol-hiscore-wrap').style.display = isNew ? 'block' : 'none';
   document.getElementById('ol-btn').textContent   = 'Next Level ›';
   document.getElementById('ol-btn').onclick       = nextLevel;
@@ -1297,14 +1339,9 @@ function showLevelComplete() {
 }
 
 function showGameOver() {
-  const isNew = checkHiScore();
-  const maxMoves = 30 + Math.min((level - 1) * 2, 20);
-  const used = maxMoves - moves;
   document.getElementById('ol-title').textContent = 'No More Moves';
-  document.getElementById('ol-moves').textContent = used + ' move' + (used === 1 ? '' : 's') + ' used';
-  document.getElementById('ol-sub').textContent   = 'Final Score';
-  document.getElementById('ol-score').textContent = score.toLocaleString();
-  document.getElementById('ol-hiscore-wrap').style.display = isNew ? 'block' : 'none';
+  document.getElementById('ol-moves').textContent = movesUsed + ' move' + (movesUsed === 1 ? '' : 's') + ' used';
+  document.getElementById('ol-hiscore-wrap').style.display = 'none';
   document.getElementById('ol-btn').textContent   = 'Try Again';
   document.getElementById('ol-btn').onclick       = newGame;
   overlay.classList.add('show');
@@ -1314,9 +1351,10 @@ function showGameOver() {
 function nextLevel() {
   overlay.classList.remove('show');
   level++;
-  target = Math.round(target * 2.0);
   moves  = 30 + Math.min(level * 2, 20);
+  movesUsed = 0;
   hints  = 3;
+  initTargets();
   // Keep the existing board — only shuffle if no valid moves remain
   if (!hasValidMove()) { shuffleBoard(); }
   render();
@@ -1325,7 +1363,8 @@ function nextLevel() {
 
 function newGame() {
   overlay.classList.remove('show');
-  score = 0; level = 1; target = 2000; moves = 30; hints = 3; selected = null;
+  level = 1; moves = 30; movesUsed = 0; hints = 3; selected = null;
+  initTargets();
   clearSave();
   newBoard();
   render();
@@ -1334,38 +1373,35 @@ function newGame() {
 // ── Persistence ────────────────────────────────────────────────────────────
 
 function saveGame() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ board, special, score, level, moves, hints, target })); } catch(e) {}
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ board, special, level, moves, movesUsed, hints, fruitTargets, fruitCollected })); } catch(e) {}
 }
 
 function loadGame() {
   try {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
     if (!s || !Array.isArray(s.board) || s.board.length !== ROWS) return false;
-    board = s.board; score = s.score ?? 0; level = s.level ?? 1;
-    moves = s.moves ?? 30; hints = s.hints ?? 3; target = s.target ?? 2000;
+    board = s.board; level = s.level ?? 1;
+    moves = s.moves ?? 30; movesUsed = s.movesUsed ?? 0; hints = s.hints ?? 3;
     special = s.special ?? board.map(row => row.map(() => null));
+    fruitTargets   = s.fruitTargets   ?? levelFruitTargets(level);
+    fruitCollected = s.fruitCollected ?? Array(GEM_TYPES).fill(0);
     return true;
   } catch(e) { return false; }
 }
 
 function clearSave()    { try { localStorage.removeItem(SAVE_KEY); } catch(e) {} }
-function saveHiScore()  { try { localStorage.setItem(HI_KEY, hiScore); } catch(e) {} }
-function loadHiScore()  { try { hiScore = parseInt(localStorage.getItem(HI_KEY) || '0', 10) || 0; } catch(e) {} }
+function saveBestLevel() { try { localStorage.setItem(BEST_KEY, bestLevel); } catch(e) {} }
+function loadBestLevel() { try { bestLevel = parseInt(localStorage.getItem(BEST_KEY) || '1', 10) || 1; } catch(e) {} }
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 
 document.getElementById('new-btn').addEventListener('click', newGame);
 document.getElementById('hint-btn').addEventListener('click', showHint);
-document.getElementById('shuffle-btn').addEventListener('click', () => {
-  if (busy) return;
-  shuffleBoard();
-  render();
-  saveGame();
-});
 
-loadHiScore();
+
+loadBestLevel();
 if (loadGame()) render();
-else { newBoard(); render(); }
+else { initTargets(); newBoard(); render(); }
 document.getElementById('monkey').classList.add('idle');
 
 if ('serviceWorker' in navigator) {
