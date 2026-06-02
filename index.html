@@ -1303,12 +1303,24 @@ function showLevelComplete() {
   updateUI();
 }
 
+function retryLevel() {
+  overlay.classList.remove('show');
+  // Reset moves and collection but keep the board as-is
+  moves     = 9 + (level - 1) * 3;
+  movesUsed = 0;
+  hints     = 3;
+  initTargets();
+  if (!hasValidMove()) { shuffleBoard(); }
+  render();
+  saveGame();
+}
+
 function showGameOver() {
   document.getElementById('ol-title').textContent = 'No More Moves';
   document.getElementById('ol-moves').textContent = movesUsed + ' move' + (movesUsed === 1 ? '' : 's') + ' used';
   document.getElementById('ol-hiscore-wrap').style.display = 'none';
   document.getElementById('ol-btn').textContent   = 'Try Again';
-  document.getElementById('ol-btn').onclick       = newGame;
+  document.getElementById('ol-btn').onclick       = retryLevel;
   overlay.classList.add('show');
   updateUI();
 }
