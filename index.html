@@ -582,6 +582,21 @@
     .stat-fruit .sf-check { opacity: 0; font-size: 0.9rem; transition: opacity 0.3s; }
     .stat-fruit.done .sf-check { opacity: 1; color: #30d158; }
 
+
+    /* Fruit count pulse when collected */
+    @keyframes fruit-collect-pulse {
+      0%   { transform: scale(1);    filter: none; }
+      35%  { transform: scale(1.5);  filter: drop-shadow(0 0 8px #ffe066) brightness(1.6); }
+      65%  { transform: scale(1.35); filter: drop-shadow(0 0 5px #ffe066) brightness(1.4); }
+      100% { transform: scale(1);    filter: none; }
+    }
+    .stat-fruit.pulse .sf-count {
+      animation: fruit-collect-pulse 0.45s ease forwards;
+    }
+    .stat-fruit.pulse .sf-emoji {
+      animation: fruit-collect-pulse 0.45s ease forwards;
+    }
+
   </style>
 </head>
 <body>
@@ -614,7 +629,7 @@
   <div class="actions">
     <div class="stat-box" style="flex:1">
       <div class="stat-label">Moves Left</div>
-      <div class="stat-value" id="moves-used-val">9</div>
+      <div class="stat-value" id="moves-used-val">10</div>
     </div>
   </div>
 </div>
@@ -638,7 +653,7 @@ const BEST_KEY = 'fruitCascade_best';
 
 let board = [];
 let special = []; // parallel board: null | 'glowing'
-let level = 1, moves = 9, movesUsed = 0, bestLevel = 1, hints = 3;
+let level = 1, moves = 10, movesUsed = 0, bestLevel = 1, hints = 3;
 let fruitTargets = [], fruitCollected = [];
 let selected = null, busy = false, touchStart = null;
 
@@ -959,36 +974,38 @@ async function cascade(combo) {
     }
   }
 
-  // Cells not merging into a special fly to the monkey
-  const flyCells = clearCells.filter(([r,c]) => !mergePivotMap.has(r*COLS+c) && !pivotSet.has(r*COLS+c));
+  // All cleared cells except the pivot fly to the monkey and count as collected.
+  // Pivot cells stay on board as glowing fruit — not counted, not animated away.
+  const flyCells = clearCells.filter(([r,c]) => !pivotSet.has(r*COLS+c));
   const capturedTypes = flyCells.map(([r,c]) => board[r][c] ?? 0);
 
-  // Hide all matched cells
+  // Hide matched cells — but NOT pivot cells (they stay visible and become glowing)
   clearCells.forEach(([r, c]) => {
+    if (pivotSet.has(r*COLS+c)) return;
     const el = cell(r, c);
     if (!el) return;
     el.classList.add(special[r][c] ? 'matching-special' : 'matching');
   });
+  // Immediately mark pivot cells as glowing so they pulse in place during the animation
+  pivotSet.forEach(key => {
+    const r = Math.floor(key/COLS), c = key%COLS;
+    const el = cell(r, c);
+    if (el) el.querySelector('.gem')?.classList.add('glowing');
+  });
 
-  // Merge animations: group cells fly into their pivot
-  for (const ns of newSpecials) {
-    const mergeCells = [...mergePivotMap.entries()]
-      .filter(([,pivot]) => pivot.r === ns.r && pivot.c === ns.c)
-      .map(([key]) => [Math.floor(key/COLS), key%COLS]);
-    mergeFruitToPivot(mergeCells, ns.r, ns.c);
-  }
-
-  // Non-merge cells fly to monkey
+  // All non-pivot cells fly to the monkey
   const flyDuration = flyCells.length > 0 ? flyFruitToMonkey(flyCells, capturedTypes) : 0;
-  const mergeDuration = newSpecials.length > 0 ? 380 : 0;
-  const waitDuration = Math.max(flyDuration, mergeDuration);
+  const waitDuration = flyDuration;
 
-  // Count cleared fruit — exclude cells that merge into a special (pivot and merge cells)
-  const mergeSet = new Set([...mergePivotMap.keys(), ...pivotSet]);
+  // Count all non-pivot cleared fruit as collected
+  const pulsedTypes = new Set();
   clearCells.forEach(([r,c]) => {
-    if (mergeSet.has(r*COLS+c)) return;
+    if (pivotSet.has(r*COLS+c)) return;
     const g = board[r][c];
-    if (g != null && g >= 0 && g < GEM_TYPES) fruitCollected[g] = (fruitCollected[g]||0) + 1;
+    if (g != null && g >= 0 && g < GEM_TYPES) {
+      fruitCollected[g] = (fruitCollected[g]||0) + 1;
+      pulsedTypes.add(g);
+    }
   });
 
   // Score
@@ -997,6 +1014,16 @@ async function cascade(combo) {
   const multiplier = combo;
   const pts = basePts * multiplier;
   updateUI();
+
+  // Pulse the fruit slots that gained a fruit
+  pulsedTypes.forEach(g => {
+    const el = document.getElementById('fruit-slot-' + g);
+    if (!el) return;
+    el.classList.remove('pulse');
+    void el.offsetWidth; // reflow to restart animation
+    el.classList.add('pulse');
+    setTimeout(() => el.classList.remove('pulse'), 500);
+  });
 
   // Wait for animations, then monkey chomps (only if fruit went to monkey)
   await delay(Math.max(waitDuration - 80, 300));
@@ -1306,7 +1333,7 @@ function showLevelComplete() {
 function retryLevel() {
   overlay.classList.remove('show');
   // Reset moves and collection but keep the board as-is
-  moves     = 9 + (level - 1) * 3;
+  moves     = 10 + (level - 1) * 2;
   movesUsed = 0;
   hints     = 3;
   initTargets();
@@ -1328,7 +1355,7 @@ function showGameOver() {
 function nextLevel() {
   overlay.classList.remove('show');
   level++;
-  moves  = 9 + (level - 1) * 3;
+  moves  = 10 + (level - 1) * 2;
   movesUsed = 0;
   hints  = 3;
   initTargets();
@@ -1340,7 +1367,7 @@ function nextLevel() {
 
 function newGame() {
   overlay.classList.remove('show');
-  level = 1; moves = 9; movesUsed = 0; hints = 3; selected = null;
+  level = 1; moves = 10; movesUsed = 0; hints = 3; selected = null;
   initTargets();
   clearSave();
   newBoard();
@@ -1358,7 +1385,7 @@ function loadGame() {
     const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
     if (!s || !Array.isArray(s.board) || s.board.length !== ROWS) return false;
     board = s.board; level = s.level ?? 1;
-    moves = s.moves ?? 9; movesUsed = s.movesUsed ?? 0; hints = s.hints ?? 3;
+    moves = s.moves ?? 10; movesUsed = s.movesUsed ?? 0; hints = s.hints ?? 3;
     special = s.special ?? board.map(row => row.map(() => null));
     fruitTargets   = s.fruitTargets   ?? levelFruitTargets(level);
     fruitCollected = s.fruitCollected ?? Array(GEM_TYPES).fill(0);
